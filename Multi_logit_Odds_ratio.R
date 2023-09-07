@@ -1,3 +1,5 @@
+#R script for a multivariate logistic regression analysis for deriving odds ratios for independent variables to be used in DHF prognosis models.
+
 library(tidyverse)
 library(readr)
 
