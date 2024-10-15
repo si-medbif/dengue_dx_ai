@@ -1,0 +1,514 @@
+---
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(lubridate)
+library(tidyverse)
+library(stringr)
+library(ggpubr)
+library(rstatix)
+
+dat <- read_csv("~/R/R_Projects/DengueAI/RawData/_DATA_2022-12-01_1125.csv")
+dat1 <- read_csv("~/R/R_Projects/DengueAI/RawData/_DATA_LABELS_2022-12-01_1122.csv")
+dat2 <- read_csv("~/R/R_Projects/DengueAI/RawData/CoDEN_for_Peter_20201002.csv")
+
+theme_set(theme_bw())
+
+#### mean_ci function
+new_mean_ci <- function(vector, alpha = 0.05, na.rm = T){
+  if(na.rm){
+  n_vector <- vector[!is.na(vector)]
+  }else{
+    n_vector <- vector
+  }
+  
+  sample.mean <- mean(n_vector)
+  sample.n <- length(n_vector)
+  sample.sd <- sd(n_vector)
+  sample.se <- sample.sd/sqrt(sample.n)
+  
+  degrees.freedom = sample.n - 1
+  t.score = qt(p=alpha/2, df=degrees.freedom,lower.tail=F)
+  
+  margin.error <- t.score * sample.se
+  lower.bound <- sample.mean - margin.error
+  upper.bound <- sample.mean + margin.error
+  
+  return(cbind(c(sample.mean,lower.bound,upper.bound)))
+}
+
+# Format Dx and Day0
+DX_Day0 <- dat1[!is.na(dat1$`Final Dx`),c("SNO:","Final Dx","Final D0")]
+DX_Day0$simple_Dx <- "DHF"
+DX_Day0$simple_Dx[which(DX_Day0$`Final Dx` == "Not dengue")] <- "OFI"
+DX_Day0$simple_Dx[which(DX_Day0$`Final Dx` == "DF")] <- "DF"
+DX_Day0$final_day0 <- ymd(DX_Day0$`Final D0`)
+DX_Day0$`Final Dx` <- DX_Day0$`Final D0` <- NULL
+
+dat <- merge(dat,DX_Day0, by.x = "sno",by.y="SNO:")
+
+# Format Site
+dat$site <- factor((substr(dat$sno,3,3)),levels = 1:2, labels = c("KK","SK"))
+
+# Format to_day0
+dat$date <- ymd(dat$date_d04)
+dat$to_day0 <- dat$date - dat$final_day0
+
+# Format study day
+dat$study_day <- as.numeric(str_match(dat$redcap_event_name, ".?study_day_([0-9])_arm_1")[,2])
+
+# Format fever day
+fever <- dat[!is.na(dat$fever_date), c("sno","fever_date")]
+fever$f_date <- ymd(fever$fever_date)
+dat <- merge(dat,fever, by = "sno", all.x = T)
+dat$fever_day <- dat$date - dat$f_date
+
+dat <- dat[which(dat$simple_Dx != "OFI"),]
+dat$simple_Dx <- factor(dat$simple_Dx, levels = c("DHF","DF"), labels = c("DHF","Non-DHF"))
+
+
+#### Use identical dataset as Peter's ####
+dat <- dat[dat$sno %in% unique(dat2$d01_sno),]
+#### Show <= 5 study day
+dat <- dat[which(dat$study_day <= 5),]
+### Jitter study day
+dat$jstudy_day <- dat$study_day + 0.1
+dat$jstudy_day[dat$simple_Dx == "Non-DHF"] <- dat$study_day[dat$simple_Dx == "Non-DHF"] - 0.1
+
+
+
+dat$study_day <- factor(dat$study_day, levels = 1:5, labels = paste0("Study Day",1:5))
+dat$simple_Dx <- factor(dat$simple_Dx, levels = c("Non-DHF","DHF")) 
+```
+
+
+```{r bleeding, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$bleeding_d04_f <- NA
+dat$bleeding_d04_f[which(dat$bleeding_d04 == 2)] <- "Yes"
+dat$bleeding_d04_f[which(dat$bleeding_d04 == 1)] <- "No"
+
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + bleeding_d04_f, dat[!is.na(dat$bleeding_d04_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$bleeding_d04_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = bleeding_d04_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Bleeding", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = bleeding_d04_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Bleeding", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_bleeding.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 1:** Time course of `Bleeding` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r rash, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$rash_f <- NA
+dat$rash_f[which(dat$rash == 2)] <- "Yes"
+dat$rash_f[which(dat$rash == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + rash_f, dat[!is.na(dat$rash_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$rash_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = rash_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Rash", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = rash_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Rash", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_rash.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 2:** Time course of `Rash` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r bruising, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$bruising_f <- NA
+dat$bruising_f[which(dat$bruising == 2)] <- "Yes"
+dat$bruising_f[which(dat$bruising == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + bruising_f, dat[!is.na(dat$bruising_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$bruising_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = bruising_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Bruising", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = bruising_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Bruising", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_bruising.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 3:** Time course of `Bruising` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r diarrhea_d04, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$diarrhea_d04_f <- NA
+dat$diarrhea_d04_f[which(dat$diarrhea_d04 == 2)] <- "Yes"
+dat$diarrhea_d04_f[which(dat$diarrhea_d04 == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + diarrhea_d04_f, dat[!is.na(dat$diarrhea_d04_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$diarrhea_d04_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = diarrhea_d04_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Diarrhea", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = diarrhea_d04_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Diarrhea", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_diarrhea.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 4:** Time course of `Diarrhea` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r uri_d04, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$uri_d04_f <- NA
+dat$uri_d04_f[which(dat$uri_d04 == 2)] <- "Yes"
+dat$uri_d04_f[which(dat$uri_d04 == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + uri_d04_f, dat[!is.na(dat$uri_d04_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$uri_d04_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = uri_d04_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "URI", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = uri_d04_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "URI", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_uri.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 5:** Time course of `URI` (Upper respiratory infection) variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r abdominal_d04, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$abdominal_d04_f <- NA
+dat$abdominal_d04_f[which(dat$abdominal_d04 == 2)] <- "Yes"
+dat$abdominal_d04_f[which(dat$abdominal_d04 == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + abdominal_d04_f, dat[!is.na(dat$abdominal_d04_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$abdominal_d04_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = abdominal_d04_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Abdominal pain", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = abdominal_d04_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Abdominal pain", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_ab_pain.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 6:** Time course of `Abdominal pain` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r dyspnea, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$dyspnea_f <- NA
+dat$dyspnea_f[which(dat$dyspnea == 2)] <- "Yes"
+dat$dyspnea_f[which(dat$dyspnea == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + dyspnea_f, dat[!is.na(dat$dyspnea_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$dyspnea_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = dyspnea_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Dyspnea", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = dyspnea_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Dyspnea", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_dyspnea.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 7:** Time course of `Dyspnea` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r liver, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$liver_f <- NA
+dat$liver_f[which(dat$liver == 2)] <- "Yes"
+dat$liver_f[which(dat$liver == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + liver_f, dat[!is.na(dat$liver_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$liver_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = liver_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Liver tenderness", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = liver_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Liver tenderness", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_liver_tenderness.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 8:** Time course of `Liver tenderness` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+
+```{r lymph, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$lymph_f <- NA
+dat$lymph_f[which(dat$lymph == 2)] <- "Yes"
+dat$lymph_f[which(dat$lymph == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + lymph_f, dat[!is.na(dat$lymph_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$lymph_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = lymph_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Lymph nodes enlargement", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = lymph_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Lymph nodes enlargement", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_lymph_enlarge.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 9:** Time course of `Lymph nodes enlargement` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r injected, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$injected_f <- NA
+dat$injected_f[which(dat$injected == 2)] <- "Yes"
+dat$injected_f[which(dat$injected == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + injected_f, dat[!is.na(dat$injected_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$injected_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = injected_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Injected conjunctiva", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = injected_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Injected conjunctiva", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_inj_conj.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 10:** Time course of `Injected conjunctiva` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
+
+```{r itching, echo=FALSE, warning=FALSE, fig.width=10,fig.height=5}
+dat$itching_f <- NA
+dat$itching_f[which(dat$itching == 2)] <- "Yes"
+dat$itching_f[which(dat$itching == 1)] <- "No"
+
+cdat <- aggregate(sno ~ simple_Dx +study_day + itching_f, dat[!is.na(dat$itching_f),],FUN = length)
+
+pdat <- aggregate(sno ~ simple_Dx +study_day , dat[!is.na(dat$itching_f),],FUN = length)
+pdat <- merge(cdat,pdat, by = c("simple_Dx","study_day"))
+pdat$perc <- 100*(pdat$sno.x/pdat$sno.y)
+
+gA <- ggplot(cdat,aes(x=simple_Dx,fill = itching_f,  y = sno))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Itching", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Number of patients")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+gB <-ggplot(pdat,aes(x=simple_Dx,fill = itching_f,  y = perc))+
+  geom_bar(stat="identity", lwd = 1)+
+  scale_fill_manual(name = "Itching", values = c("gray","gray5"))+
+  xlab("")+
+  ylab("Proportion of patients (%)")+
+  facet_grid(.~study_day)+
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+g <- ggarrange(gA,gB,ncol = 2,nrow = 1, labels = c("A","B"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_itch.eps",width=10,height = 5,units = "in", device=cairo_ps)
+```
+
+**Fig. 11:** Time course of `Itching` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw counts (A) and proportions by group by study day (B).
+
+\newpage
