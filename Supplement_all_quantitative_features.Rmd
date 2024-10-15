@@ -1,0 +1,1299 @@
+---
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(lubridate)
+library(tidyverse)
+library(stringr)
+library(ggpubr)
+library(rstatix)
+library(latex2exp)
+
+dat <- read_csv("~/R/R_Projects/DengueAI/RawData/_DATA_2022-12-01_1125.csv")
+dat1 <- read_csv("~/R/R_Projects/DengueAI/RawData/_DATA_LABELS_2022-12-01_1122.csv")
+dat2 <- read_csv("~/R/R_Projects/DengueAI/RawData/CoDEN_for_Peter_20201002.csv")
+
+theme_set(theme_bw())
+
+#### mean_ci function
+new_mean_ci <- function(vector, alpha = 0.05, na.rm = T){
+  if(na.rm){
+  n_vector <- vector[!is.na(vector)]
+  }else{
+    n_vector <- vector
+  }
+  
+  sample.mean <- mean(n_vector)
+  sample.n <- length(n_vector)
+  sample.sd <- sd(n_vector)
+  sample.se <- sample.sd/sqrt(sample.n)
+  
+  degrees.freedom = sample.n - 1
+  t.score = qt(p=alpha/2, df=degrees.freedom,lower.tail=F)
+  
+  margin.error <- t.score * sample.se
+  lower.bound <- sample.mean - margin.error
+  upper.bound <- sample.mean + margin.error
+  
+  return(cbind(c(sample.mean,lower.bound,upper.bound)))
+}
+
+# Format Dx and Day0
+DX_Day0 <- dat1[!is.na(dat1$`Final Dx`),c("SNO:","Final Dx","Final D0")]
+DX_Day0$simple_Dx <- "DHF"
+DX_Day0$simple_Dx[which(DX_Day0$`Final Dx` == "Not dengue")] <- "OFI"
+DX_Day0$simple_Dx[which(DX_Day0$`Final Dx` == "DF")] <- "DF"
+DX_Day0$final_day0 <- ymd(DX_Day0$`Final D0`)
+DX_Day0$`Final Dx` <- DX_Day0$`Final D0` <- NULL
+
+dat <- merge(dat,DX_Day0, by.x = "sno",by.y="SNO:")
+
+# Format Site
+dat$site <- factor((substr(dat$sno,3,3)),levels = 1:2, labels = c("KK","SK"))
+
+# Format to_day0
+dat$date <- ymd(dat$date_d04)
+dat$to_day0 <- dat$date - dat$final_day0
+
+# Format study day
+dat$study_day <- as.numeric(str_match(dat$redcap_event_name, ".?study_day_([0-9])_arm_1")[,2])
+
+# Format fever day
+fever <- dat[!is.na(dat$fever_date), c("sno","fever_date")]
+fever$f_date <- ymd(fever$fever_date)
+dat <- merge(dat,fever, by = "sno", all.x = T)
+dat$fever_day <- dat$date - dat$f_date
+
+# Format platelet
+dat$log.platelet <- log10(1+dat$platelet_d05*10^3)
+
+# Format WBC
+dat$log.wbc <- log10(1+dat$wbc_d05*10^3)
+
+# Format PMN
+dat$abs_pmn <- ((dat$pmn * dat$wbc_d05)/100)
+
+# Format BAND
+dat$abs_band <- ((dat$band * dat$wbc_d05)/100)
+
+# Format LYMP
+dat$abs_lymp <- ((dat$lymp * dat$wbc_d05)/100)
+
+# Format ATYP
+dat$abs_atyp <- ((dat$atyp * dat$wbc_d05)/100)
+
+# Format MONO
+dat$abs_mono <- ((dat$mono * dat$wbc_d05)/100)
+
+# Format BASO
+dat$abs_baso <- ((dat$baso * dat$wbc_d05)/100)
+
+# Format EOSIN
+dat$abs_eosin <- ((dat$eosin * dat$wbc_d05)/100)
+
+# Format LFT protein
+dat$log.prot <- log10(1+dat$lft_protein)
+
+# Format LFT albumin
+dat$log.alb <- log10(1+dat$lft_albumin)
+
+# Format LFT AST
+dat$log.ast <- log10(1+dat$lft_ast)
+
+# Format LFT ALT
+dat$log.alt <- log10(1+dat$lft_alt)
+
+# Format Fluid retention
+dat$fluid_ret <- rowSums(dat[,c("intake1","intake2","intake3")], na.rm = T) - rowSums(dat[,c("output1","output2","output3")], na.rm = T)
+
+dat <- dat[which(dat$simple_Dx != "OFI"),]
+dat$simple_Dx <- factor(dat$simple_Dx, levels = c("DHF","DF"), labels = c("DHF","Non-DHF"))
+
+#### Use identical dataset as Peter's ####
+dat <- dat[dat$sno %in% unique(dat2$d01_sno),]
+#### Show <= 5 study day
+dat <- dat[which(dat$study_day <= 5),]
+### Jitter study day
+dat$jstudy_day <- dat$study_day + 0.1
+dat$jstudy_day[dat$simple_Dx == "Non-DHF"] <- dat$study_day[dat$simple_Dx == "Non-DHF"] - 0.1
+```
+
+
+```{r platelet, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(platelet_d05 ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = platelet_d05))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Platelet count (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,500))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Platelet count (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,500))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Platelet count (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values =  c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,500))+
+  theme(legend.position = "top")
+
+
+g <- ggarrange(gA,gB,gC,ncol = 2,nrow = 2, labels = c("A","B","C"))
+print(g)
+ggsave(filename = "../Plots/Supplement_platelet_count.tiff",width=8,height = 8,units = "in",dpi=300)
+ggsave(filename = "../Plots/Supplement_platelet_count.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 1:** Time course of `Platelet count` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r hct_lab, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(hct_d05 ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = hct_d05))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(15,50))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(15,50))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(15,50))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,ncol = 2,nrow = 2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_hematocrit.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 2:** Time course of `Hematocrit` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r WBC, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(wbc_d05 ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = wbc_d05))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("WBC (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,40))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("WBC (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,40))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("WBC (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,40))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_WBC.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 3:** Time course of `WBC` (white blood cell) variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r PMN, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_pmn ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_pmn))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute PMN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute PMN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute PMN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_PMN.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 4:** Time course of `PMN` (polymorphonuclear neutrophil) variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r band, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_band ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_band))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BAND (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,2.5))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BAND (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,2.5))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BAND (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,2.5))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_BAND.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 5:** Time course of `BAND`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r lymp, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_lymp ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_lymp))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute LYMP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute LYMP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute LYMP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,20))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_LYMP.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 6:** Time course of `LYMP` (Lymphocyte)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+
+\newpage
+
+```{r atyp, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_atyp ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_atyp))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute ATYP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute ATYP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute ATYP (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_ATYP.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 7:** Time course of `ATYP` (Atypical lymphocyte)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r mono, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_mono ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_mono))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute MONO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute MONO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute MONO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_MONO.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 8:** Time course of `MONO` (Monocyte)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r baso, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_baso ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_baso))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BASO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,0.6))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BASO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,0.6))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute BASO (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,0.6))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_BASO.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 9:** Time course of `BASO` (Basophil)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r eosin, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(abs_eosin ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = abs_eosin))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Absolute EOSIN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,5))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute EOSIN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,5))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Absolute EOSIN (x 1000 cells/$\\mu$l)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,5))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_EOSIN.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 10:** Time course of `EOSIN` (Eosinophil)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r protein, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(lft_protein ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = lft_protein))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Total protein (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Total protein (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Total protein (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,10))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_protein.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 11:** Time course of `Protein` (Total protein)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r albumin, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(lft_albumin ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = lft_albumin))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Albumin (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Albumin (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Albumin (g/dL)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,6))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_Albumin.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 12:** Time course of `Albumin`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r alt, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(lft_alt ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = lft_alt))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("ALT (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,3000))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("ALT (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,3000))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("ALT (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,3000))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_ALT.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 13:** Time course of `ALT` (Alanine transaminase)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r ast, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(lft_ast ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = lft_ast))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("AST (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10000))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("AST (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,10000))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("AST (IU/L)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,10000))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_AST.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 14:** Time course of `AST` (Aspartate transaminase)  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r fluid, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(fluid_ret ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = fluid_ret))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Fluid retention (ml)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(-5000,5000))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+   ylab(TeX("Fluid retention (ml)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(-5000,5000))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+   ylab(TeX("Fluid retention (ml)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(-5000,5000))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_fluid.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 15:** Time course of `Fluid retention` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r liver_size, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(liver_size ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = liver_size))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Liver size (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,8))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Liver size (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,8))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Liver size (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,8))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_liver_size.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 16:** Time course of `Liver size` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r ab_circum, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(ab_circum ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = ab_circum))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Abdominal circumference (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,110))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Abdominal circumference (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,110))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Abdominal circumference (cm)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,110))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_ab_cir.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 17:** Time course of `Abdominal circumference` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r weight, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(weight ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = weight))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Weight (kg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,105))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Weight (kg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,105))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Weight (kg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,105))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_weight.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 18:** Time course of `Weight` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r temp_max, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(temp_max ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = temp_max))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Maximum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_max_temp.eps",width=8,height = 8,units = "in", device=cairo_ps)
+
+```
+
+**Fig. 19:** Time course of `Maximum temperature` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r temp_min, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(temp_min ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = temp_min))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Minimum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum temperature (celcius)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(35,43))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_min_temp.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 20:** Time course of `Minimum temperature` variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r sbp, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(sbp ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = sbp))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("SBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(60,140))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("SBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(60,140))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("SBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(60,140))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_sbp.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 21:** Time course of `SBP` (Systolic blood pressure) variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r dbp, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(dbp ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = dbp))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("DBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(30,100))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("DBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(30,100))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("DBP (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(30,100))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_dbp.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 22:** Time course of `DBP` (Diastolic blood pressure) variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r pulse_pre_min, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(pulse_pre_min ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = pulse_pre_min))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Minimum pulse pressure (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,61))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+   ylab(TeX("Minimum pulse pressure (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,61))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+   ylab(TeX("Minimum pulse pressure (mmHg)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,61))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_pulse_press.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 23:** Time course of `Minimum pulse pressure`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r pulse_rate_max, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(pulse_rate_max ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = pulse_rate_max))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Maximum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(60,180))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(60,180))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(60,180))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_max_pulse.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 24:** Time course of `Maximum pulse rate`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r pulse_rate_min, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(pulse_rate_min ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = pulse_rate_min))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Minimum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(40,140))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(40,140))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum pulse rate (beat/minute)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(40,140))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_min_pulse.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 25:** Time course of `Minimum pulse rate`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r hct_max, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(hct_max ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = hct_max))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Maximum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(20,70))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(20,70))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Maximum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(20,70))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+
+ggsave(plot = g, filename = "../Plots/Supplement_max_hct_ward.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 26:** Time course of `Maximum fingertip hematocrit`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
+
+\newpage
+
+```{r hct_min, echo=FALSE, warning=FALSE, fig.width=8,fig.height=8}
+meandat <- aggregate(hct_min ~ simple_Dx + study_day, dat, new_mean_ci)
+meandat$mean <- meandat[,3][,1]
+meandat$low <- meandat[,3][,2]
+meandat$up <- meandat[,3][,3]
+
+gA <- ggplot(dat, aes(dat, x = jstudy_day, col = simple_Dx, y = hct_min))+
+  geom_jitter(width = 0.07, shape = 1)+
+  xlab("Study day")+
+  ylab(TeX("Minimum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,60))+
+  theme(legend.position = "top")
+
+gB <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  coord_cartesian(ylim = c(0,60))+
+  theme(legend.position = "top")
+
+gC <- ggplot(meandat,aes(x = study_day, col = simple_Dx))+
+  geom_line(aes(y=mean,group=simple_Dx)) +
+  geom_ribbon(aes(ymin = low,ymax=up,fill=simple_Dx), alpha = 0.3, col = NA)+
+  xlab("Study day")+
+  ylab(TeX("Minimum fingertip hematocrit (%)"))+
+  scale_color_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  scale_fill_manual(name = "Diagnosis", values = c("#EFC000FF","#0073C2FF"))+
+  #coord_cartesian(ylim = c(0,60))+
+  theme(legend.position = "top")
+
+g <- ggarrange(gA,gB,gC,nrow = 2,ncol=2, labels = c("A","B","C"))
+print(g)
+ggsave(plot = g, filename = "../Plots/Supplement_min_hct_ward.eps",width=8,height = 8,units = "in", device=cairo_ps)
+```
+
+**Fig. 27:** Time course of `Minimum fingertip hematocrit`  variable from study day one to five in two groups (DHF and Non-DHF).  The data are shown as raw values (A) and means by group by study day (B) with the shaded areas representing 95% confident intervals of the means. The mean values (B) are also zoomed in to show the difference and trajectories two groups (C).
